@@ -7,13 +7,12 @@ import os
 from scipy.stats import t
 from scipy.stats import kstest
 
-
 class outlierCleaner():
     '''Class that contains multiple methods to clean outlier data'''
     def __init__(self,file_name:str='',source:pd.DataFrame=pd.DataFrame()):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if file_name:
-            self.source_data = pd.read_csv(os.path.join(self.base_dir,'data',file_name))
+            self.source_data = pd.read_csv(os.path.join(self.base_dir,'data',file_name), index_col=0)
         else:
             self.source_data = source
             
@@ -60,11 +59,11 @@ class outlierCleaner():
         execution_time = tm.time() - t
         return outliers,execution_time
     
-    def grubbs_test(self,target:str,alpha:int =3.5):
+    def grubbs_test(self,target:str,alpha:int =0.05):
         '''Applies the grubbs testfor outlier detection'''
-        t = tm.time()
         df = self.source_data
-        def grubbs_method(data, alpha=0.05):
+
+        def grubbs_method(data, alpha=alpha):
             mean = np.mean(data)
             std_dev = np.std(data)
             N = len(data)
@@ -73,6 +72,5 @@ class outlierCleaner():
             critical_value = ((N - 1) * np.sqrt(t_value**2)) / (np.sqrt(N) * np.sqrt(N - 2 + t_value**2))
             return G > critical_value
         outliers = df[df[target].apply(lambda x: grubbs_method(df[target]))]
-        execution_time = tm.time() - t
 
-        return outliers,execution_time
+        return outliers

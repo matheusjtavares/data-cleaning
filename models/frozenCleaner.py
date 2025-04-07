@@ -7,6 +7,7 @@ import os
 class frozenCleaner():
 
     '''Class that contains multiple methods to detect frozen data'''
+    
     def __init__(self,file_name:str='',source:pd.DataFrame=pd.DataFrame()):
         self.base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         if file_name:
@@ -14,10 +15,9 @@ class frozenCleaner():
         else:
             self.source_data = source
 
-    def frozen_by_threshold(self,target:str,ts_column:str,threshold:float=0.00001):
+    def frozen_by_threshold(self,target:str,df:pd.DataFrame,ts_column:str,threshold:float=0.00001):
         '''Detects Frozen data using a threshold of change. Use the sensor sensitivity as the threshold'''
         t = tm.time()
-        df = self.source_data
         df=df.sort_values(by=ts_column,ascending=True)
         # Detect frozen values
         df['change'] = df[target].diff().abs()

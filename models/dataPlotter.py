@@ -62,6 +62,7 @@ class dataPlotter():
         plt.savefig(os.path.join(self.chart_output_path,chart_name))
         plt.close()
         return True
+    
     def make_box_plot(self,target:str,chart_name:str='box_plot.png'):
         df = self.source_data
         sns.boxplot(x=df[target])

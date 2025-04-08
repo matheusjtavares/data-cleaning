@@ -17,11 +17,14 @@ from random import randint
 from frozenCleaner import frozenCleaner
 from outlierCleaner import outlierCleaner
 from tensorflow.keras.regularizers import l1
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import json
 class turbAI():
 
     def __init__(self):
         self.project_root = os.path.dirname(os.path.dirname(__file__))
         self.data_folder = os.path.join(self.project_root,'input/')
+        self.chart_output_path = os.path.join(self.project_root,'output/charts')
         self.fcleaner = frozenCleaner()
         self.ocleaner = outlierCleaner()
         
@@ -342,10 +345,16 @@ def train_model():
     turb.build_correlation_chart(df)
     normalization_dict = {}
     for column in df.columns:
+        if column == 'TS':
+            continue
         normalization_dict[column]={
             'max':df[column].max(),
             'min':df[column].min(),
             }
+
+    with open('normalization.json', 'w') as fp:
+        json.dump(normalization_dict, fp)
+    normalization_dict
     normalized_df = df.copy()
     columns_to_normalize = normalized_df.columns.difference(['TS'])
 
@@ -355,7 +364,7 @@ def train_model():
         normalized_df[columns_to_normalize].max() - normalized_df[columns_to_normalize].min()
     )    
     # normalized_df=(df-df.min())/(df.max()-df.min())
-    plt.figure(figsize=(15, 6))
+    plt.figure(figsize=(15, 6)) 
     sns.boxplot(data=normalized_df,fliersize=0)
     plt.xticks(rotation=90)  # Rotaciona os rótulos das colunas para melhor visualização
     # plt.show()
@@ -368,7 +377,7 @@ def train_model():
     model_loss = 9999
     np.random.seed(42)
     normalized_df = normalized_df.drop(columns = ['TS'])
-    while model_loss>0.0001:
+    while model_loss>=0.004:
         layers = np.random.randint(3, 5)
         hidden_layers = {
             x:tf.keras.layers.Dense(np.random.randint(50, 200), kernel_regularizer=l1(0.0001), activation='relu')
@@ -441,43 +450,106 @@ def test_model(model_name='turbAI_big_mse_0.00144.keras'):
                      x_labels= x_labels,
                      predictions=y_pred
     )
-def test_autoencoder_model(model_name='turbAI_auto_mse_0.0048.keras'):
+def test_autoencoder_model(model_name='turbAI_auto_mse_0.0045.keras'):
     turb = turbAI()
     current_directory = os.getcwd()
     print(os)
     model = tf.keras.models.load_model(fr'saved_models/{model_name}')
-    print('aa')
-    df = turb.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
-    df = df.drop(columns=[10])
-    df = df.dropna() 
-    # df = df.loc[df[50]==60]
-    x_labels = pd.to_datetime(df.TS)
-    df.TS = pd.to_datetime(df.TS)
+    raw_df = turb.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
+    raw_df = raw_df.drop(columns=[10])
+    raw_df.TS = pd.to_datetime(raw_df.TS)
     downtime_df = turb.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
     downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
     downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
-    # for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
-    #     date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
-    #     df = df[~df.TS.isin(date_list)]
-    df = df.drop(columns=['TS',50])
-    
-    melted_df = df.melt(var_name="Feature", value_name="Value")
-    g = sns.FacetGrid(melted_df, col="Feature", col_wrap=5, sharex=False, sharey=False)
-    g.map(sns.violinplot, "Value")
-    # plt.show()
-    normalized_df = (df-df.min())/(df.max()-df.min())
-    X = tf.convert_to_tensor(normalized_df.values,tf.float32)
+    raw_df = raw_df.dropna()  
+    df = raw_df.copy()
+    df = df.dropna()  
+    for column in df.columns:
+        if column in ['TS',50]:
+            continue
+        outliers,time = turb.fcleaner.frozen_by_threshold(target=column,df=df,ts_column='TS')
+        df = df[~df.TS.isin(outliers.TS)]
+    print(f'Total Lines unfrozen df {df.shape[0]}')
+
+    for column in df.columns:
+        if column in ['TS',50]:
+            continue
+        outliers,time = turb.ocleaner.modified_z_score(target=column,df=df)
+        df = df.drop(columns=['Modified_Z_Score'])
+        df = df[~df.TS.isin(outliers.TS)]
+    df = df.loc[df[50]==60]
+    for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
+        date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
+        df = df[~df.TS.isin(date_list)]
+    df = df.drop(columns=[50])
+    raw_df = raw_df.drop(columns=[50])
+
+    raw_df['original_anomaly'] = raw_df.apply(lambda x: False if x.TS in df.TS.values else True,axis = 1)
+    normalized_df = raw_df.copy()
+    columns_to_normalize = normalized_df.columns.difference(['TS','original_anomaly'])
+    with open('normalization.json', 'r') as fp:
+        normalization_dict = json.load(fp)
+    for col in columns_to_normalize:
+        col_min = normalization_dict[str(col)]['min']
+        col_max = normalization_dict[str(col)]['max']
+        normalized_df[col] = (normalized_df[col] - col_min) / (col_max - col_min)
+  
+    X = tf.convert_to_tensor(normalized_df[columns_to_normalize].values,tf.float32)
     y_pred = model.predict(X)
-    normalized_df['of'] = X - y_pred
-    normalized_df['predictions'] = y_pred
-    normalized_df['mae'] = tf.keras.metrics.mae(Y, y_pred)
-    normalized_df['mse'] = tf.keras.metrics.mse(Y, y_pred)
-    turb.plot_predictions(train_data=X,
-                     train_labels=Y,
-                     x_labels= x_labels,
-                     predictions=y_pred
-    )
+    reconstruction_error = np.mean(np.square(normalized_df[columns_to_normalize].values - y_pred), axis=1)
+    # Add to the DataFrame
+    normalized_df["reconstruction_error"] = reconstruction_error
+
+    from sklearn.metrics import precision_recall_curve
+
+    # Get precision, recall, and threshold values
+    precision, recall, thresholds = precision_recall_curve(normalized_df['original_anomaly'], reconstruction_error)
+
+    # Calculate F1 score for each threshold
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+    best_idx = np.argmax(f1)
+    best_threshold = thresholds[best_idx]
+    best_f1 = f1[best_idx]
+
+    print(f"Best Threshold: {best_threshold:.6f}")
+    print(f"Best F1 Score: {best_f1:.4f}")
+    plt.plot(thresholds, precision[:-1], label='Precision')
+    plt.plot(thresholds, recall[:-1], label='Recall')
+    plt.plot(thresholds, f1[:-1], label='F1 Score')
+    plt.axvline(best_threshold, color='red', linestyle='--', label='Best Threshold')
+    plt.xlabel("Reconstruction Error Threshold")
+    plt.ylabel("Score")
+    plt.legend()
+    plt.title("Precision, Recall, F1 vs Threshold")
+    plt.grid()
+    plt.show()
+    threshold = best_threshold
+    normalized_df["is_anomaly"] = (reconstruction_error > threshold)
+    plt.figure(figsize=(8, 5))
+    plt.hist(normalized_df["reconstruction_error"], bins=50, alpha=0.7)
+    plt.axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
+    plt.title("Reconstruction Error Distribution")
+    plt.xlabel("Reconstruction Error (MSE)")
+    plt.ylabel("Number of Samples")
+    plt.legend()
+    plt.savefig(os.path.join(turb.chart_output_path,'of_hist'))
+    plt.close()
+    plt.figure(figsize=(8, 5))
+    plt.hist(normalized_df[normalized_df.original_anomaly==False]["reconstruction_error"], bins=50, alpha=0.7)
+    plt.axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
+    plt.title("Reconstruction Error Distribution")
+    plt.xlabel("Reconstruction Error (MSE)")
+    plt.ylabel("Number of Samples")
+    plt.legend()
+    plt.savefig(os.path.join(turb.chart_output_path,'normal_of_hist'))
+    plt.close()
+
+    cm = confusion_matrix(normalized_df['original_anomaly'], normalized_df["is_anomaly"])
+    disp = ConfusionMatrixDisplay(cm)
+    disp.plot()
+    plt.title("Confusion Matrix")
+    plt.show()
 if __name__=='__main__':
-    train_model()
+    # train_model()
     # test_model()
-    # test_autoencoder_model()
+    test_autoencoder_model()

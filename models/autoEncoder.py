@@ -14,10 +14,10 @@ import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from random import randint
-from frozenCleaner import frozenCleaner
-from outlierCleaner import outlierCleaner
+from models.frozenCleaner import frozenCleaner
+from models.outlierCleaner import outlierCleaner
 from tensorflow.keras.regularizers import l1
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, precision_recall_curve
 import json
 class turbAI():
 
@@ -102,9 +102,11 @@ class turbAI():
         for index,network in network_settings.items():
             model,model_history = self.build_and_generate_model(x_tensor=X,y_tensor=X,hidden_layers=network['hidden_layers'],
                                           epochs=network['epochs'],learning_rate=network['learning_rate'],loss=network['loss'])
-            if np.min(model_history.history['loss']) < 0.01:
-                model.save(fr'saved_models/turbAI_auto_{network['loss']}_{round(np.min(model_history.history['loss']),5)}.keras')
-        return np.min(model_history.history['loss'])
+            with open("best_model_history.json", "w") as f:
+                json.dump(model_history.history, f)
+            # if np.min(model_history.history['loss']) < 0.01:
+            #     model.save(fr'saved_models/turbAI_auto_{network['loss']}_{round(np.min(model_history.history['loss']),5)}.keras')
+        return np.min(model_history.history['loss']),model
     
 
     def build_correlation_chart(self,arg_df):
@@ -300,256 +302,354 @@ class turbAI():
         plt.tight_layout()
         # plt.show()
 
-def train_model():
-    turb = turbAI()
-    current_directory = os.getcwd()
-    print(os)
-    # alarms_df = turb.get_inputs_from_filename(extension='.csv',filename= 'alarms_data_3.csv',add_pivot=False)
-    # alarms_df['TS_START'] = alarms_df['TS_START'].dt.floor('10min')
-    # alarms_df['TS_END'] = alarms_df['TS_END'].dt.ceil('10min')
-    downtime_df = turb.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
-    downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
-    downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
-    df = turb.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
-    print(f'Total Lines raw df {df.shape[0]}')
-    df = df.drop(columns=[10])
-    df['TS'] = pd.to_datetime(df['TS'])
-    df = df.dropna() 
-    for column in df.columns:
-        if column in ['TS',50]:
-            continue
-        outliers,time = turb.fcleaner.frozen_by_threshold(target=column,df=df,ts_column='TS')
-        df = df[~df.TS.isin(outliers.TS)]
-    print(f'Total Lines unfrozen df {df.shape[0]}')
+    def train_model(self):
+        downtime_df = self.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
+        downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
+        downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
+        for column in ['EL_AMA','EL_NEIGHBOR','EL_POWER_CURVE','EL_WINDFARM_AVERAGE']:
+            downtime_df[column] = downtime_df[column].str.replace(',','.').astype(float)
+        downtime_df['TOTAL_LOSS'] = downtime_df[['EL_AMA','EL_NEIGHBOR','EL_POWER_CURVE','EL_WINDFARM_AVERAGE']].sum(axis=1)
+        downtime_df = downtime_df[~((downtime_df.ALARM_REG_ID == 712 )& (downtime_df.TOTAL_LOSS < 100))]
+        df = self.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
+        print(f'Total Lines raw df {df.shape[0]}')
+        df = df.drop(columns=[10])
+        df['TS'] = pd.to_datetime(df['TS'])
+        df = df.dropna() 
+        print(f'Total Lines na df {df.shape[0]}')
+        
+        for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
+            date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
+            df = df[~df.TS.isin(date_list)]
+        print(f'Total Lines downtime df {df.shape[0]}')
+        for column in df.columns:
+            if column in ['TS',50]:
+                continue
+            outliers,time = self.fcleaner.frozen_by_threshold(target=column,df=df,ts_column='TS')
+            df = df[~df.TS.isin(outliers.TS)]
+        print(f'Total Lines unfrozen df {df.shape[0]}')
 
-    for column in df.columns:
-        if column in ['TS',50]:
-            continue
-        outliers,time = turb.ocleaner.modified_z_score(target=column,df=df)
-        df = df[~df.TS.isin(outliers.TS)]
-    df = df.drop(columns=['Modified_Z_Score'])
-    print(f'Total Lines Mzscore df {df.shape[0]}')
-
-    downtime_df = turb.get_inputs_from_filename(extension='.csv',filename= 'downtimes_data_3.csv',add_pivot=False)
-    downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
-    downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
-    for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
-        date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
-        df = df[~df.TS.isin(date_list)]
-    print(f'Total Lines downtime df {df.shape[0]}')
-
-    df = df.loc[df[50]==60]
-    print(f'Total Lines status df {df.shape[0]}')
-
-    df = df.drop(columns=[50])
-    turb.build_correlation_chart(df)
-    normalization_dict = {}
-    for column in df.columns:
-        if column == 'TS':
-            continue
-        normalization_dict[column]={
-            'max':df[column].max(),
-            'min':df[column].min(),
-            }
-
-    with open('normalization.json', 'w') as fp:
-        json.dump(normalization_dict, fp)
-    normalization_dict
-    normalized_df = df.copy()
-    columns_to_normalize = normalized_df.columns.difference(['TS'])
-
-    normalized_df[columns_to_normalize] = (
-        normalized_df[columns_to_normalize] - normalized_df[columns_to_normalize].min()
-    ) / (
-        normalized_df[columns_to_normalize].max() - normalized_df[columns_to_normalize].min()
-    )    
-    # normalized_df=(df-df.min())/(df.max()-df.min())
-    plt.figure(figsize=(15, 6)) 
-    sns.boxplot(data=normalized_df,fliersize=0)
-    plt.xticks(rotation=90)  # Rotaciona os rótulos das colunas para melhor visualização
-    # plt.show()
-    # denormalized_df = normalized_df.copy()
-    # for column in denormalized_df.columns:
-    #     max_val = normalization_dict[column]['max']
-    #     min_val = normalization_dict[column]['min']
-    #     denormalized_df[column] = denormalized_df[column] * (max_val - min_val) + min_val
-    desired_output = 20
-    model_loss = 9999
-    np.random.seed(42)
-    normalized_df = normalized_df.drop(columns = ['TS'])
-    while model_loss>=0.004:
-        layers = np.random.randint(3, 5)
-        hidden_layers = {
-            x:tf.keras.layers.Dense(np.random.randint(50, 200), kernel_regularizer=l1(0.0001), activation='relu')
-            for x in list(range(layers))
-        }
-        layers_0 = np.random.randint(60, 80)
-        layers_1 = np.random.randint(30, 40)
-        layers_2 = np.random.randint(15, 20)
-        hidden_layers = {
-            0:tf.keras.layers.Dense(layers_0, activation='relu'),
-            1:tf.keras.layers.Dense(layers_1, activation='relu'),
-            2:tf.keras.layers.Dense(layers_2, activation='relu'),
-            3:tf.keras.layers.Dense(10, kernel_regularizer=l1(0.0001), activation='relu'),
-            4:tf.keras.layers.Dense(layers_2, activation='relu'),
-            5:tf.keras.layers.Dense(layers_1, activation='relu'),
-            6:tf.keras.layers.Dense(layers_0, activation='relu'),
-        }
-        loss_flip = np.random.choice([True,False])
-        loss = 'mae' if loss_flip == True else 'mse'
-        # learning_rate = np.random.uniform(0,0.001)
-        learning_rate = 0.005
-        network_settings = {
-            0:{
-            'hidden_layers':hidden_layers,
-            'epochs' : 200,
-            'loss': 'mse',
-            'learning_rate':learning_rate
-            }
-        }
-        print(network_settings)
-        try:
-            model_loss = turb.build_multiple_from_dict(df=normalized_df,network_settings=network_settings,desired_output=desired_output)
-        except:
-            continue
-    else:
-        print('found a match!')
-        print(network_settings)
-def test_model(model_name='turbAI_big_mse_0.00144.keras'):
-    turb = turbAI()
-    current_directory = os.getcwd()
-    print(os)
-    model = tf.keras.models.load_model(fr'saved_models/{model_name}')
-    print('aa')
-    df = turb.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
-    df = df.drop(columns=[10])
-    df = df.dropna() 
-    # df = df.loc[df[50]==60]
-    x_labels = pd.to_datetime(df.TS)
-    df.TS = pd.to_datetime(df.TS)
-    downtime_df = turb.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
-    downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
-    downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
-    # for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
-    #     date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
-    #     df = df[~df.TS.isin(date_list)]
-    df = df.drop(columns=['TS',50])
-    
-    melted_df = df.melt(var_name="Feature", value_name="Value")
-    g = sns.FacetGrid(melted_df, col="Feature", col_wrap=5, sharex=False, sharey=False)
-    g.map(sns.violinplot, "Value")
-    # plt.show()
-    normalized_df = (df-df.min())/(df.max()-df.min())
-    X,Y=turb.convert_df_to_tensors(normalized_df,20)
-    y_pred = model.predict(X)
-    normalized_df['predictions'] = y_pred
-    normalized_df['mae'] = tf.keras.metrics.mae(Y, y_pred)
-    normalized_df['mse'] = tf.keras.metrics.mse(Y, y_pred)
-    turb.plot_predictions(train_data=X,
-                     train_labels=Y,
-                     x_labels= x_labels,
-                     predictions=y_pred
-    )
-def test_autoencoder_model(model_name='turbAI_auto_mse_0.0045.keras'):
-    turb = turbAI()
-    current_directory = os.getcwd()
-    print(os)
-    model = tf.keras.models.load_model(fr'saved_models/{model_name}')
-    raw_df = turb.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
-    raw_df = raw_df.drop(columns=[10])
-    raw_df.TS = pd.to_datetime(raw_df.TS)
-    downtime_df = turb.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
-    downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
-    downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
-    raw_df = raw_df.dropna()  
-    df = raw_df.copy()
-    df = df.dropna()  
-    for column in df.columns:
-        if column in ['TS',50]:
-            continue
-        outliers,time = turb.fcleaner.frozen_by_threshold(target=column,df=df,ts_column='TS')
-        df = df[~df.TS.isin(outliers.TS)]
-    print(f'Total Lines unfrozen df {df.shape[0]}')
-
-    for column in df.columns:
-        if column in ['TS',50]:
-            continue
-        outliers,time = turb.ocleaner.modified_z_score(target=column,df=df)
+        for column in df.columns:
+            if column in ['TS',50]:
+                continue
+            outliers,time = self.ocleaner.modified_z_score(target=column,df=df)
+            df = df[~df.TS.isin(outliers.TS)]
         df = df.drop(columns=['Modified_Z_Score'])
-        df = df[~df.TS.isin(outliers.TS)]
-    df = df.loc[df[50]==60]
-    for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
-        date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
-        df = df[~df.TS.isin(date_list)]
-    df = df.drop(columns=[50])
-    raw_df = raw_df.drop(columns=[50])
+        print(f'Total Lines Mzscore df {df.shape[0]}')
+        df = df.loc[df[50]==60]
+        print(f'Total Lines status df {df.shape[0]}')
+        df = df.drop(columns=[50])
+        self.build_correlation_chart(df)
+        normalization_dict = {}
+        for column in df.columns:
+            if column == 'TS':
+                continue
+            normalization_dict[column]={
+                'max':df[column].max(),
+                'min':df[column].min(),
+                }
 
-    raw_df['original_anomaly'] = raw_df.apply(lambda x: False if x.TS in df.TS.values else True,axis = 1)
-    normalized_df = raw_df.copy()
-    columns_to_normalize = normalized_df.columns.difference(['TS','original_anomaly'])
-    with open('normalization.json', 'r') as fp:
-        normalization_dict = json.load(fp)
-    for col in columns_to_normalize:
-        col_min = normalization_dict[str(col)]['min']
-        col_max = normalization_dict[str(col)]['max']
-        normalized_df[col] = (normalized_df[col] - col_min) / (col_max - col_min)
-  
-    X = tf.convert_to_tensor(normalized_df[columns_to_normalize].values,tf.float32)
-    y_pred = model.predict(X)
-    reconstruction_error = np.mean(np.square(normalized_df[columns_to_normalize].values - y_pred), axis=1)
-    # Add to the DataFrame
-    normalized_df["reconstruction_error"] = reconstruction_error
+        with open('normalization.json', 'w') as fp:
+            json.dump(normalization_dict, fp)
+        normalization_dict
+        normalized_df = df.copy()
+        columns_to_normalize = normalized_df.columns.difference(['TS'])
 
-    from sklearn.metrics import precision_recall_curve
+        normalized_df[columns_to_normalize] = (
+            normalized_df[columns_to_normalize] - normalized_df[columns_to_normalize].min()
+        ) / (
+            normalized_df[columns_to_normalize].max() - normalized_df[columns_to_normalize].min()
+        )    
+        # normalized_df=(df-df.min())/(df.max()-df.min())
+        plt.figure(figsize=(15, 6)) 
+        sns.boxplot(data=normalized_df,fliersize=0)
+        plt.xticks(rotation=90)  # Rotaciona os rótulos das colunas para melhor visualização
+        # plt.show()
+        desired_output = 20
+        model_loss = 9999
+        np.random.seed(42)
+        normalized_df = normalized_df.drop(columns = ['TS'])
+        while model_loss>=0.002:
+            layers = np.random.randint(3, 5)
+            hidden_layers = {
+                x:tf.keras.layers.Dense(np.random.randint(50, 200), kernel_regularizer=l1(0.0001), activation='relu')
+                for x in list(range(layers))
+            }
+            layers_0 = np.random.randint(60, 80)
+            layers_1 = np.random.randint(30, 40)
+            layers_2 = np.random.randint(15, 20)
+            bneck = np.random.randint(10, 20)
+            hidden_layers = {
+                0:tf.keras.layers.Dense(79, activation='relu'),
+                1:tf.keras.layers.Dense(36, activation='relu'),
+                2:tf.keras.layers.Dense(18, activation='relu'),
+                3:tf.keras.layers.Dense(17, kernel_regularizer=l1(0.0001), activation='relu'),
+                4:tf.keras.layers.Dense(18, activation='relu'),
+                5:tf.keras.layers.Dense(36, activation='relu'),
+                6:tf.keras.layers.Dense(79, activation='relu'),
+            }
+            loss_flip = np.random.choice([True,False])
+            loss = 'mae' if loss_flip == True else 'mse'
+            # learning_rate = np.random.uniform(0,0.001)
+            learning_rate = 0.00017336464952677488
+            network_settings = {
+                0:{
+                'hidden_layers':hidden_layers,
+                'epochs' : 200,
+                'loss': 'mse',
+                'learning_rate':learning_rate
+                }
+            }
+            print(network_settings)
+            try:
+                model_loss,model = self.build_multiple_from_dict(df=normalized_df,network_settings=network_settings,desired_output=desired_output)
+                test = self.test_autoencoder_model(model)
+                if test:
+                    break
+            except:
+                continue
+        else:
+            print('found a match!')
+            print(network_settings)
+    def load_normalized_df(self):
+        raw_df = self.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
+        raw_df = raw_df.drop(columns=[10])
+        raw_df.TS = pd.to_datetime(raw_df.TS)
+        downtime_df = self.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
+        downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
+        downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
+        for column in ['EL_AMA','EL_NEIGHBOR','EL_POWER_CURVE','EL_WINDFARM_AVERAGE']:
+            downtime_df[column] = downtime_df[column].str.replace(',','.').astype(float)
+        downtime_df['TOTAL_LOSS'] = downtime_df[['EL_AMA','EL_NEIGHBOR','EL_POWER_CURVE','EL_WINDFARM_AVERAGE']].sum(axis=1)
+        # downtime_df = downtime_df[~((downtime_df.ALARM_REG_ID == 712 )& (downtime_df.TOTAL_LOSS < 100))]
+        # raw_df = raw_df.ffill()
+        # raw_df = raw_df.dropna()  
+        df = raw_df.copy()
+        df = df.dropna()
 
-    # Get precision, recall, and threshold values
-    precision, recall, thresholds = precision_recall_curve(normalized_df['original_anomaly'], reconstruction_error)
+        for column in df.columns:
+            if column in ['TS',50]:
+                continue
+            outliers,time = self.fcleaner.frozen_by_threshold(target=column,df=df,ts_column='TS')
+            df = df[~df.TS.isin(outliers.TS)]
+        
+        for column in df.columns:
+            if column in ['TS',50]:
+                continue
+            outliers,time = self.ocleaner.modified_z_score(target=column,df=df)
+            df = df.drop(columns=['Modified_Z_Score'])
+            df = df[~df.TS.isin(outliers.TS)]
+        df = df.loc[df[50]==60]
+        for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
+            date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
+            df = df[~df.TS.isin(date_list)]
+        df = df.drop(columns=[50])
 
-    # Calculate F1 score for each threshold
-    f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
-    best_idx = np.argmax(f1)
-    best_threshold = thresholds[best_idx]
-    best_f1 = f1[best_idx]
+        raw_df = raw_df.drop(columns=[50])
+        raw_df = raw_df.ffill()
+        # raw_df = raw_df.fillna(0)
+        
+        raw_df['original_anomaly'] = raw_df.apply(lambda x: False if x.TS in df.TS.values else True,axis = 1)
+        normalized_df = raw_df.copy()
+        columns_to_normalize = normalized_df.columns.difference(['TS','original_anomaly'])
+        with open('normalization.json', 'r') as fp:
+            normalization_dict = json.load(fp)
+        for col in columns_to_normalize:
+            col_min = normalization_dict[str(col)]['min']
+            col_max = normalization_dict[str(col)]['max']
+            normalized_df[col] = (normalized_df[col] - col_min) / (col_max - col_min)
+        return normalized_df,columns_to_normalize
+    
+    def plot_model_results(self,model,normalized_df,columns_to_normalize):
+        # Get precision, recall, and threshold values
+        
+         
+        label_map = {True: "Anômalo", False: "Sadio"}
+        anomaly_counts = normalized_df["original_anomaly"].map(label_map).value_counts()
+        fig, ax = plt.subplots(figsize=(8, 4))
+        bars = ax.barh(anomaly_counts.index, anomaly_counts.values, color=["#EF5350", "#66BB6A"], edgecolor='black')
+        # Style
+        ax.set_xlabel("Quantidade", fontsize=11)
+        ax.set_ylabel("Classe", fontsize=11)
+        ax.grid(axis="x", linestyle="--", alpha=0.4)
+        ax.spines[['right', 'top']].set_visible(False)  # cleaner look
+        plt.xticks(fontsize=10)
+        plt.yticks(fontsize=10)
+        # Add value labels to the bars
+        for bar in bars:
+            width = bar.get_width()
+            ax.text(width + max(anomaly_counts.values)*0.01, bar.get_y() + bar.get_height()/2,
+                    f"{int(width)}", va='center', fontsize=10)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.chart_output_path, "Anomaly_Division.png"), dpi=600)
+        plt.close()
+        
+        fig, ax = plt.subplots(figsize=(8, 4))
 
-    print(f"Best Threshold: {best_threshold:.6f}")
-    print(f"Best F1 Score: {best_f1:.4f}")
-    plt.plot(thresholds, precision[:-1], label='Precision')
-    plt.plot(thresholds, recall[:-1], label='Recall')
-    plt.plot(thresholds, f1[:-1], label='F1 Score')
-    plt.axvline(best_threshold, color='red', linestyle='--', label='Best Threshold')
-    plt.xlabel("Reconstruction Error Threshold")
-    plt.ylabel("Score")
-    plt.legend()
-    plt.title("Precision, Recall, F1 vs Threshold")
-    plt.grid()
-    plt.show()
-    threshold = best_threshold
-    normalized_df["is_anomaly"] = (reconstruction_error > threshold)
-    plt.figure(figsize=(8, 5))
-    plt.hist(normalized_df["reconstruction_error"], bins=50, alpha=0.7)
-    plt.axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
-    plt.title("Reconstruction Error Distribution")
-    plt.xlabel("Reconstruction Error (MSE)")
-    plt.ylabel("Number of Samples")
-    plt.legend()
-    plt.savefig(os.path.join(turb.chart_output_path,'of_hist'))
-    plt.close()
-    plt.figure(figsize=(8, 5))
-    plt.hist(normalized_df[normalized_df.original_anomaly==False]["reconstruction_error"], bins=50, alpha=0.7)
-    plt.axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
-    plt.title("Reconstruction Error Distribution")
-    plt.xlabel("Reconstruction Error (MSE)")
-    plt.ylabel("Number of Samples")
-    plt.legend()
-    plt.savefig(os.path.join(turb.chart_output_path,'normal_of_hist'))
-    plt.close()
+        X = tf.convert_to_tensor(normalized_df[columns_to_normalize].values,tf.float32)
+        y_pred = model.predict(X)
+        reconstruction_error = np.mean(np.square(normalized_df[columns_to_normalize].values - y_pred), axis=1)
+        # Add to the DataFrame
+        normalized_df["reconstruction_error"] = reconstruction_error
+        precision, recall, thresholds = precision_recall_curve(normalized_df['original_anomaly'], reconstruction_error)
+        # Calculate F1 score for each threshold
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+        best_idx = np.argmax(f1)
+        best_threshold = thresholds[best_idx]
+        best_f1 = f1[best_idx]
+        print(f"Best Threshold: {best_threshold:.6f}")
+        print(f"Best F1 Score: {best_f1:.4f}")
+        print(f"Best Recall: {recall[best_idx]:.4f}")
+        print(f"Best Precision: {precision[best_idx]:.4f}")
+        
+        fig, ax = plt.subplots(figsize=(8, 5))
+        precision_line = plt.plot(thresholds, precision[:-1], label='Precisão')
+        recall_line = plt.plot(thresholds, recall[:-1], label='Recall')
+        f1_line = plt.plot(thresholds, f1[:-1], label='F1 Score')
+        bfo_line = plt.axvline(best_threshold, color='red', linestyle='--', label=f'LFO - {best_threshold:.4f}')
+        ax.set_xlabel("Erro de Reconstrução (MSE)", fontsize=11)
+        ax.set_ylabel("Score", fontsize=11)
+        ax.spines[['right', 'top']].set_visible(False)  # cleaner look
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.chart_output_path,'Precision, Recall, F1 vs Threshold'), dpi=600)
+        plt.close()
 
-    cm = confusion_matrix(normalized_df['original_anomaly'], normalized_df["is_anomaly"])
-    disp = ConfusionMatrixDisplay(cm)
-    disp.plot()
-    plt.title("Confusion Matrix")
-    plt.show()
+
+        threshold = best_threshold
+
+        rec_errors = normalized_df["reconstruction_error"]  # or whatever column you're plotting
+
+        # Create color list based on threshold
+        colors = ["#EF5350" if val > threshold else "#66BB6A" for val in rec_errors]
+
+        normalized_df["is_anomaly"] = (reconstruction_error > threshold)
+        # normalized_df.loc[normalized_df["reconstruction_error"]>=1,"reconstruction_error"] = 0.01
+        fig, ax = plt.subplots(figsize=(8, 4))
+        
+        error_dist = plt.scatter(normalized_df["TS"],rec_errors,c=colors, alpha=0.7, edgecolor='k', s=20)
+        thresh_line = plt.axhline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
+        ax.set_xlabel("TS")
+        ax.set_ylabel("Erro de Reconstrução (MSE)")
+        ax.legend()
+        ax.spines[['right', 'top']].set_visible(False)  # cleaner look
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.chart_output_path,'Distribution Across Errors'), dpi=600)
+        plt.close()
+
+        fig, ax = plt.subplots(figsize=(8, 4))
+        
+        rec_range_errors = normalized_df[normalized_df.reconstruction_error <= 0.2]["reconstruction_error"]  # or whatever column you're plotting
+
+        # Create color list based on threshold
+        range_colors = ["#EF5350" if val > threshold else "#66BB6A" for val in rec_range_errors]
+
+        error_dist = plt.scatter(normalized_df[normalized_df.reconstruction_error <= 0.2]["TS"],rec_range_errors,c=range_colors, alpha=0.7, s=20)
+        thresh_line = plt.axhline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
+        ax.set_xlabel("TS")
+        ax.set_ylabel("Erro de Reconstrução (MSE)")
+        ax.legend()
+        ax.spines[['right', 'top']].set_visible(False)  # cleaner look
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.chart_output_path,'Distribution Across Errors Range 1'), dpi=600)
+        plt.close()
+        
+        
+
+        # Create color list based on threshold
+        fig, ax = plt.subplots(figsize=(8, 4))
+        error_hist = plt.hist(normalized_df[normalized_df.reconstruction_error <= 0.2]['reconstruction_error'],bins = 200, alpha=0.7, edgecolor='k')
+        thresh_line = plt.axvline(threshold, color='red', linestyle='--', label=f'Threshold = {threshold:.4f}')
+        ax.set_xlabel("Erro de Reconstrução (MSE)")
+        ax.set_ylabel("Total de Amostras")
+        ax.legend()
+        ax.spines[['right', 'top']].set_visible(False)  # cleaner look
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.chart_output_path,'Error Histogram'), dpi=600)
+        plt.close()
+        
+        fig, ax = plt.subplots(figsize=(8, 4))
+        cm = confusion_matrix(normalized_df['original_anomaly'], normalized_df["is_anomaly"])
+        disp = ConfusionMatrixDisplay(cm)
+        disp.plot()
+        ax.set_xlabel("Rótulo Previsto")
+        ax.set_ylabel("Rótulo Verdadeiro")
+        plt.title("Confusion Matrix")
+        plt.savefig(os.path.join(self.chart_output_path,'Confusion Matrix'), dpi=600)
+
+        return
+
+    def test_autoencoder_model(self,model):
+        # model = tf.keras.models.load_model(fr'saved_models/{model_name}')
+        raw_df = self.get_inputs_from_filename(extension='.csv',filename= 'TURBINE_TER_3_2024.csv')
+        raw_df = raw_df.drop(columns=[10])
+        raw_df.TS = pd.to_datetime(raw_df.TS)
+        downtime_df = self.get_inputs_from_filename(extension='.csv',filename= 'dn_ter_3.csv',add_pivot=False)
+        downtime_df['TS_START'] = pd.to_datetime(downtime_df['TS_START']).dt.floor('10min')
+        downtime_df['TS_END'] = pd.to_datetime(downtime_df['TS_END']).dt.ceil('10min')
+        for column in ['EL_AMA','EL_NEIGHBOR','EL_POWER_CURVE','EL_WINDFARM_AVERAGE']:
+            downtime_df[column] = downtime_df[column].str.replace(',','.').astype(float)
+        downtime_df['TOTAL_LOSS'] = downtime_df[['EL_AMA','EL_NEIGHBOR','EL_POWER_CURVE','EL_WINDFARM_AVERAGE']].sum(axis=1)
+        downtime_df = downtime_df[~((downtime_df.ALARM_REG_ID == 712 )& (downtime_df.TOTAL_LOSS < 100))]
+        raw_df = raw_df.ffill()
+        df = raw_df.copy()
+        for column in df.columns:
+            if column in ['TS',50]:
+                continue
+            outliers,time = self.fcleaner.frozen_by_threshold(target=column,df=df,ts_column='TS')
+            df = df[~df.TS.isin(outliers.TS)]
+        
+        for column in df.columns:
+            if column in ['TS',50]:
+                continue
+            outliers,time = self.ocleaner.modified_z_score(target=column,df=df)
+            df = df.drop(columns=['Modified_Z_Score'])
+            df = df[~df.TS.isin(outliers.TS)]
+        df = df.loc[df[50]==60]
+        for ts_start,ts_end in zip(downtime_df['TS_START'],downtime_df['TS_END']):
+            date_list = pd.date_range(start=ts_start, end=ts_end, freq='10min')
+            df = df[~df.TS.isin(date_list)]
+        df = df.drop(columns=[50])
+        raw_df = raw_df.drop(columns=[50])
+
+        raw_df['original_anomaly'] = raw_df.apply(lambda x: False if x.TS in df.TS.values else True,axis = 1)
+        normalized_df = raw_df.copy()
+        columns_to_normalize = normalized_df.columns.difference(['TS','original_anomaly'])
+        with open('normalization.json', 'r') as fp:
+            normalization_dict = json.load(fp)
+        for col in columns_to_normalize:
+            col_min = normalization_dict[str(col)]['min']
+            col_max = normalization_dict[str(col)]['max']
+            normalized_df[col] = (normalized_df[col] - col_min) / (col_max - col_min)
+
+        X = tf.convert_to_tensor(normalized_df[columns_to_normalize].values,tf.float32)
+        y_pred = model.predict(X)
+        reconstruction_error = np.mean(np.square(normalized_df[columns_to_normalize].values - y_pred), axis=1)
+        # Add to the DataFrame
+        normalized_df["reconstruction_error"] = reconstruction_error
+
+
+        # Get precision, recall, and threshold values
+        precision, recall, thresholds = precision_recall_curve(normalized_df['original_anomaly'], reconstruction_error)
+
+        # Calculate F1 score for each threshold
+        f1 = 2 * (precision * recall) / (precision + recall + 1e-10)
+        best_idx = np.argmax(f1)
+        best_threshold = thresholds[best_idx]
+        best_f1 = f1[best_idx]
+        print(f"Best Threshold: {best_threshold:.6f}")
+        print(f"Best F1 Score: {best_f1:.4f}")
+        if best_f1 >= 0.853:
+            return True
+        else:
+            return False
+    def demo_model(self,model_name):
+        model = tf.keras.models.load_model(fr'saved_models/current_best_model.keras')
+        normalized_df,columns_to_normalize = self.load_normalized_df()
+        self.plot_model_results(model,normalized_df,columns_to_normalize)
+
 if __name__=='__main__':
-    # train_model()
+    train_model()
     # test_model()
-    test_autoencoder_model()
+    
+    # test_autoencoder_model('best_model_copy.keras')
+    test_autoencoder_model('turbAI_auto_f1_0.8177843306227798.keras')

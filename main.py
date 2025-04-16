@@ -1,23 +1,47 @@
+import json
+import os
+import tensorflow as tf
+import pandas as pd
+import matplotlib.pyplot as plt 
+import seaborn as sns
+from random import randint
+from models.autoEncoder import turbAI
 
-from models.outlierCleaner import outlierCleaner
-from models.dataPlotter import dataPlotter
+def plot_losses_chart():
+    with open("current_best_model_history.json") as f:
+        history_dict = json.load(f)
+        df = pd.DataFrame(history_dict)
+        # Shift index so epoch starts at 1
+        df.index = df.index + 1
+        # Find the best val_loss
+        best_epoch = len(df["val_loss"])-10
+        best_val = df["val_loss"].min()
+        df = df.rename(columns={'val_loss': 'Validação',
+                        'loss':'Treinamento'})
+        # Plot loss curves
+        ax = df[["Treinamento", "Validação"]].plot.bar(
+            figsize=(10, 6),
+            xlabel="Época",
+            ylabel="MSE",
+            grid=False
+        )
 
+        # Highlight best val_loss
+        ax.scatter(best_epoch-1, best_val, color="red", zorder=5, label=f"Melhor Epóca: {best_epoch} - MSE: {best_val:.4f}")
 
+        # Add vertical dotted line
+        ax.axvline(x=best_epoch-1, linestyle="--", color="red", alpha=0.6)
 
-data_plotter = dataPlotter(file_name='T1.csv')
-outlier_cleaner = outlierCleaner(file_name='T1.csv')
-outlier_cleaner.grubbs_test(target='Velocidade do Vento (m/s)')
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(r'output/charts/Training Charts.jpg', dpi=600)
+        plt.close()
 
-data_plotter.make_all_histogram()
-data_plotter.plot_time_series(width=25,height=10)
-
-data_plotter.make_histogram(target='Velocidade do Vento (m/s)',bins=40)
-data_plotter.make_histogram(target='Potência Teórica (kW)',bins=40)
-
-outlier_cleaner.z_score(target='Velocidade do Vento (m/s)')
-a,b=outlier_cleaner.modified_z_score(target='Velocidade do Vento (m/s)',limit=3)
-outlier_cleaner.source_data.describe()
-data_plotter.plot_time_series(width=25,height=10)
+if __name__ == '__main__':
+    plot_losses_chart()
+    turb = turbAI()
+    turb.demo_model('current_best_model.keras')
+    print('aaa')
 
 
 

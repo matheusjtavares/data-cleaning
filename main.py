@@ -8,7 +8,7 @@ from random import randint
 from models.autoEncoder import turbAI
 
 def plot_losses_chart():
-    with open("current_best_model_history.json") as f:
+    with open("best_model_history.json") as f:
         history_dict = json.load(f)
         df = pd.DataFrame(history_dict)
         # Shift index so epoch starts at 1
@@ -34,14 +34,13 @@ def plot_losses_chart():
 
         ax.legend()
         plt.tight_layout()
-        plt.savefig(r'output/charts/Training Charts.jpg', dpi=600)
+        plt.savefig(r'output/charts/Training Charts.jpg', dpi=600, bbox_inches='tight')
         plt.close()
 
 if __name__ == '__main__':
     plot_losses_chart()
     turb = turbAI()
-    turb.demo_model('current_best_model.keras')
-    print('aaa')
-
+    turb.demo_model(model_name='best_model_f108542.keras')
+    # turb.train_model()
 
 
